@@ -1,0 +1,4 @@
+node_modules/
+.env
+apps/ingestion-service/.env
+apps/upload-service/.env

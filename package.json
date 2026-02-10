@@ -1,0 +1,10 @@
+{
+    "name": "ai-faq-platform",
+    "private": true,
+    "devDependencies": {
+        "@types/cors": "^2.8.19"
+    },
+    "workspaces": [
+    "apps/*"
+  ]
+}
