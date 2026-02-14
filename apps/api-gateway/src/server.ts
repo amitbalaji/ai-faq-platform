@@ -2,6 +2,10 @@ import express, { Handler } from "express"
 import cors from "cors"
 import rateLimit from "express-rate-limit"
 import dotenv from "dotenv"
+import path from "path"
+dotenv.config({
+  path: path.resolve(__dirname, "../.env")
+})
 import { verifyJWT } from "./middleware/jwt"
 import { requireRole } from "./middleware/requireRole"
 

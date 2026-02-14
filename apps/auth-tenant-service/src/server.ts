@@ -1,12 +1,15 @@
 import express from "express"
 import cors from "cors"
 import dotenv from "dotenv"
+import path from "path"
 import bcrypt from "bcrypt"
+dotenv.config({
+  path: path.resolve(__dirname, "../.env")
+})
 import jwt from "jsonwebtoken"
-import crypto from "crypto"
 import { db } from "./db"
 
-
+console.log("Loaded DB URL:", process.env.DATABASE_URL)
 dotenv.config()
 
 const app = express()
