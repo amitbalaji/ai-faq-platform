@@ -3,9 +3,12 @@ import { Kafka } from "kafkajs"
 import { Pool } from "pg"
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3"
 import pdfParse from "pdf-parse"
+import { chunkText } from "./chunker"
+import path from "path"
 
-dotenv.config()
-
+dotenv.config({
+  path: path.resolve(__dirname, "../.env")
+})
 // 🔹 Database
 const db = new Pool({
   connectionString: process.env.DATABASE_URL
@@ -72,7 +75,7 @@ async function start() {
         console.error("❌ Failed to mark document as processing:", err)
         return
       }
-
+     
       while (attempt < maxRetries) {
         try {
           console.log(`🔄 Processing ${documentId}, attempt ${attempt + 1}`)
@@ -94,11 +97,33 @@ async function start() {
           // 🔽 Extract PDF text
           const pdfData = await pdfParse(fileBuffer)
 
+          const chunks = chunkText(pdfData.text)
+          console.log(`🧩 Created ${chunks.length} chunks`)
+
           console.log(
             `📄 Extracted text length: ${pdfData.text.length}`
           )
 
+           //If retries happen, you don’t want duplicate chunks inserted.
+           await db.query(
+            `DELETE FROM document_chunks WHERE document_id = $1`,
+            [documentId]
+          )
+
           // TODO: Chunk + embeddings here later
+
+          for (let i = 0; i < chunks.length; i++) {
+            await db.query(
+              `
+              INSERT INTO document_chunks
+              (document_id, tenant_id, chunk_index, content)
+              VALUES ($1, $2, $3, $4)
+              `,
+              [documentId, payload.tenantId, i, chunks[i]]
+            )
+          }
+
+         
 
           // 🔹 Mark as ready
           await db.query(
