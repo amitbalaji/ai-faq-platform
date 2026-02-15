@@ -4,9 +4,10 @@
       "module": "CommonJS",
       "rootDir": "src",
       "outDir": "dist",
-      "esModuleInterop": true
+      "esModuleInterop": true,
+      "strict": false,
+      "skipLibCheck": true
     },
-    "include": ["src/**/*"],
-    "exclude": ["node_modules", "dist", "**/*.test.ts"]
+    "include": ["src"]
   }
   
