@@ -84,5 +84,50 @@ router.get("/", async (req, res) => {
 
   res.json(result.rows)
 })
+// CHANGE: Add vector search endpoint that accepts pre-computed embeddings
+router.post("/search", async (req, res) => {
+  const tenantId = req.headers["x-tenant-id"] as string
+  const { query, embedding } = req.body
+
+  if (!tenantId) {
+    return res.status(401).json({ error: "Missing tenant context" })
+  }
+
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: "Query text is required" })
+  }
+
+  if (!embedding || !Array.isArray(embedding)) {
+    return res.status(400).json({ error: "Pre-computed embedding is required" })
+  }
+
+  try {
+    // CHANGE: Only perform vector similarity search - no AI logic
+    const result = await db.query(
+      `
+      SELECT content,
+             1 - (embedding <=> $1) AS similarity,
+             chunk_index
+      FROM document_chunks
+      WHERE tenant_id = $2
+      ORDER BY embedding <=> $1
+      LIMIT 5
+      `,
+      [JSON.stringify(embedding), tenantId]
+    )
+
+    res.json({
+      query,
+      results: result.rows.map(row => ({
+        content: row.content,
+        similarity: parseFloat(row.similarity),
+        chunkIndex: row.chunk_index
+      }))
+    })
+  } catch (err) {
+    console.error("Search failed:", err)
+    res.status(500).json({ error: "Search failed" })
+  }
+})
 
 export default router
