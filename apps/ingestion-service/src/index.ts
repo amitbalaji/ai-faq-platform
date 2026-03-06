@@ -64,35 +64,76 @@ const s3 = new S3Client({
 
 /* ---------------- AI SERVICE CLIENT ---------------- */
 
-// CHANGE: Add AI Service client for embedding generation
-async function generateEmbedding(text: string): Promise<number[]> {
+// CHANGE: Enhanced embedding generation with retry logic for better reliability
+async function generateEmbedding(text: string, retries: number = 2): Promise<number[]> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 30000) // 30s timeout
+  const timeoutId = setTimeout(() => controller.abort(), 30000)
 
-  try {
-    const response = await fetch(`${process.env.AI_SERVICE_URL}/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-      signal: controller.signal
-    })
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(`${process.env.AI_SERVICE_URL}/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+        signal: controller.signal
+      })
 
-    if (!response.ok) {
-      throw new Error(`AI Service embedding failed: ${response.status} ${response.statusText}`)
+      if (!response.ok) {
+        throw new Error(`AI Service embedding failed: ${response.status} ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      return data.embedding
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        throw new Error('AI Service request timeout')
+      }
+      
+      // CHANGE: Retry on network errors but not on validation errors
+      if (attempt < retries && !error.message.includes('400')) {
+        console.warn(`Embedding attempt ${attempt + 1} failed, retrying...`, error.message)
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)))
+        continue
+      }
+      
+      throw new Error(`AI Service error: ${error.message}`)
+    } finally {
+      clearTimeout(timeoutId)
     }
-
-    const data = await response.json()
-    return data.embedding
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error('AI Service request timeout')
-    }
-    throw new Error(`AI Service error: ${error.message}`)
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 
+/* ---------------- TEXT SANITIZATION ---------------- */
+
+// CHANGE: Add text sanitization to handle problematic characters
+function sanitizeText(text: string): string {
+  if (!text || typeof text !== 'string') {
+    return ''
+  }
+
+  return text
+    // CHANGE: Remove null bytes that cause PostgreSQL UTF-8 errors
+    .replace(/\x00/g, '')
+    // CHANGE: Remove other control characters except newlines, tabs, and carriage returns
+    .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    // CHANGE: Normalize whitespace
+    .replace(/\s+/g, ' ')
+    // CHANGE: Trim leading/trailing whitespace
+    .trim()
+}
+
+// CHANGE: Validate text content quality
+function isValidTextContent(text: string): boolean {
+  if (!text || text.length < 10) {
+    return false
+  }
+
+  // CHANGE: Check if text has reasonable character distribution (not mostly binary)
+  const printableChars = text.replace(/[^\x20-\x7E\s]/g, '').length
+  const printableRatio = printableChars / text.length
+
+  return printableRatio > 0.7 // At least 70% printable characters
+}
 
 /* ---------------- HELPERS ---------------- */
 
@@ -115,10 +156,17 @@ function isRetryableError(error: any): boolean {
     }
   }
 
-    // CHANGE: AI Service errors are retryable unless they're validation errors
-    if (error.message?.includes('AI Service')) {
-      return !error.message.includes('400')
-    }
+  // CHANGE: PostgreSQL encoding errors are non-retryable without text sanitization
+  if (error.message?.includes('invalid byte sequence') || 
+      error.message?.includes('UTF8') ||
+      error.message?.includes('encoding')) {
+    return false
+  }
+
+  // CHANGE: AI Service errors are retryable unless they're validation errors
+  if (error.message?.includes('AI Service')) {
+    return !error.message.includes('400')
+  }
 
   return true
 }
@@ -237,26 +285,65 @@ async function start() {
           if (!response.Body) throw new Error("Empty S3 body")
 
           const buffer = await streamToBuffer(response.Body)
-          const pdfData = await pdfParse(buffer)
+          
+          // CHANGE: Enhanced PDF parsing with better error handling
+          let pdfData: any
+          try {
+            pdfData = await pdfParse(buffer)
+          } catch (pdfError) {
+            throw new Error(`PDF parsing failed: ${pdfError.message}`)
+          }
 
-          const chunks = chunkText(pdfData.text)
+          // CHANGE: Sanitize extracted text to remove problematic characters
+          const sanitizedText = sanitizeText(pdfData.text)
+          
+          // CHANGE: Validate text content quality
+          if (!isValidTextContent(sanitizedText)) {
+            throw new Error(`PDF contains insufficient readable text. Extracted: ${sanitizedText.length} chars`)
+          }
+
+          console.log(`📄 Extracted ${sanitizedText.length} characters of clean text`)
+
+          // CHANGE: Use sanitized text for chunking
+          const chunks = chunkText(sanitizedText, 1000, 200)
           console.log(`🧩 ${chunks.length} chunks created`)
+
+          // CHANGE: Filter out empty or very short chunks after sanitization
+          const validChunks = chunks.filter(chunk => {
+            const cleanChunk = sanitizeText(chunk)
+            return cleanChunk.length >= 50 && isValidTextContent(cleanChunk)
+          })
+
+          if (validChunks.length === 0) {
+            throw new Error("No valid text chunks found after sanitization")
+          }
+
+          console.log(`✅ ${validChunks.length} valid chunks after filtering`)
 
           /* ---- Transaction Safety ---- */
 
           await db.query("BEGIN")
 
-          for (let i = 0; i < chunks.length; i++) {
-            const embedding = await generateEmbedding(chunks[i])
+          for (let i = 0; i < validChunks.length; i++) {
+            // CHANGE: Double-sanitize chunk content before database insertion
+            const finalChunk = sanitizeText(validChunks[i])
+            
+            if (!finalChunk || finalChunk.length < 10) {
+              console.warn(`⚠️ Skipping invalid chunk ${i}`)
+              continue
+            }
+
+            // CHANGE: Enhanced embedding generation with retry logic
+            const embedding = await generateEmbedding(finalChunk)
             await db.query(
               `
               INSERT INTO document_chunks
               (document_id, tenant_id, chunk_index, content, embedding)
-              VALUES ($1, $2, $3, $4)
+              VALUES ($1, $2, $3, $4, $5)
               ON CONFLICT (document_id, chunk_index)
-              DO UPDATE SET content = EXCLUDED.content
+              DO UPDATE SET content = EXCLUDED.content, embedding = EXCLUDED.embedding
               `,
-              [documentId, tenantId, i, chunks[i]]
+              [documentId, tenantId, i, finalChunk, JSON.stringify(embedding)]
             )
           }
 
