@@ -28,6 +28,7 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "api-gateway" })
 })
 
+// CHANGE: Admin-only profile access
 app.get("/admin/profile", verifyJWT, requireRole("admin"), (req, res) => {
   res.json({
     message: "Admin profile access granted",
@@ -35,48 +36,67 @@ app.get("/admin/profile", verifyJWT, requireRole("admin"), (req, res) => {
   })
 })
 
-app.post("/admin/upload", verifyJWT, requireRole("admin"), (req, res) => {
-  res.json({ message: "Admin upload allowed" })
+// CHANGE: Admin-only document upload endpoints
+app.post("/admin/upload/presigned", verifyJWT, requireRole("admin"), async (req, res) => {
+  const user = (req as any).user
+
+  const response = await fetch("http://localhost:4003/upload/presigned", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenantId: user.tenantId,
+      fileName: req.body.fileName,
+      mimeType: req.body.mimeType
+    })
+  })
+
+  const data = await response.json()
+  res.status(response.status).json(data)
 })
 
-app.post("/chat/query", verifyJWT, requireRole("user"), (req, res) => {
-  res.json({ message: "Chat allowed" })
+app.post("/documents", verifyJWT, requireRole("admin"), async (req, res) => {
+  const user = (req as any).user
+
+  const response = await fetch("http://localhost:4004/documents", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-tenant-id": user.tenantId,
+      "x-user-id": user.userId,
+      "x-role": user.role
+    },
+    body: JSON.stringify(req.body)
+  })
+
+  const data = await response.json()
+  res.status(response.status).json(data)
 })
 
-app.listen(4000, () => {
-  console.log("API Gateway running at http://localhost:4000")
-})
+// CHANGE: User and admin can search documents (read-only for users)
+app.post("/documents/search", verifyJWT, requireRole("user"), async (req, res) => {
+  const user = (req as any).user
+  const { query } = req.body
 
-app.post(
-  "/admin/upload/presigned",
-  verifyJWT,
-  requireRole("admin"),
-  async (req, res) => {
-    const user = (req as any).user
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: "Query text is required" })
+  }
 
-    const response = await fetch("http://localhost:4003/upload/presigned", {
+  try {
+    // CHANGE: Generate embedding via AI service
+    const embeddingResponse = await fetch("http://localhost:3003/embeddings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tenantId: user.tenantId,
-        fileName: req.body.fileName,
-        mimeType: req.body.mimeType
-      })
+      body: JSON.stringify({ text: query })
     })
 
-    const data = await response.json()
-    res.status(response.status).json(data)
-  }
-)
+    if (!embeddingResponse.ok) {
+      throw new Error(`AI Service failed: ${embeddingResponse.status}`)
+    }
 
-app.post(
-  "/documents",
-  verifyJWT,
-  requireRole("admin"),
-  async (req, res) => {
-    const user = (req as any).user
+    const { embedding } = await embeddingResponse.json()
 
-    const response = await fetch("http://localhost:4004/documents", {
+    // CHANGE: Forward search request to document service
+    const searchResponse = await fetch("http://localhost:4004/documents/search", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -84,11 +104,73 @@ app.post(
         "x-user-id": user.userId,
         "x-role": user.role
       },
-      body: JSON.stringify(req.body)
+      body: JSON.stringify({ query, embedding })
+    })
+
+    const searchData = await searchResponse.json()
+    res.status(searchResponse.status).json(searchData)
+
+  } catch (err) {
+    console.error("Search failed:", err)
+    res.status(500).json({ error: "Search failed" })
+  }
+})
+
+// CHANGE: User and admin can access chat functionality
+app.post("/chat/query", verifyJWT, requireRole("user"), async (req, res) => {
+  const user = (req as any).user
+  const { query, conversationId } = req.body
+
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: "Query text is required" })
+  }
+
+  try {
+    // CHANGE: Forward chat request to chat service with user context
+    const chatResponse = await fetch("http://localhost:3002/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": user.tenantId,
+        "x-user-id": user.userId,
+        "x-role": user.role
+      },
+      body: JSON.stringify({ query, conversationId })
+    })
+
+    const chatData = await chatResponse.json()
+    res.status(chatResponse.status).json(chatData)
+
+  } catch (err) {
+    console.error("Chat failed:", err)
+    res.status(500).json({ error: "Chat failed" })
+  }
+})
+
+// CHANGE: Admin can list documents for their tenant
+app.get("/documents", verifyJWT, requireRole("admin"), async (req, res) => {
+  const user = (req as any).user
+
+  try {
+    const response = await fetch("http://localhost:4004/documents", {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": user.tenantId,
+        "x-user-id": user.userId,
+        "x-role": user.role
+      }
     })
 
     const data = await response.json()
     res.status(response.status).json(data)
-  }
-)
 
+  } catch (err) {
+    console.error("List documents failed:", err)
+    res.status(500).json({ error: "Failed to list documents" })
+  }
+})
+
+app.listen(4000, () => {
+  console.log("API Gateway running at http://localhost:4000")
+})

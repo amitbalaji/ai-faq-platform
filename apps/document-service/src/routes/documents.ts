@@ -5,12 +5,13 @@ import { randomUUID } from "crypto"
 
 const router = Router()
 
-// CHANGE: Add interface for search response to fix TypeScript error
+// CHANGE: Add interface for search response to maintain TypeScript compatibility
 interface SearchResponse {
   query: string
   minSimilarity: number
   totalResults: number
   totalScanned: number
+  userRole: string
   results: Array<{
     content: string
     similarity: number
@@ -39,7 +40,7 @@ interface SearchResponse {
  * Create document metadata (Admin only)
  */
 router.post("/", async (req, res) => {
-  // ✅ Read identity from headers (API Gateway responsibility)
+  // CHANGE: Read identity from headers (API Gateway responsibility)
   const tenantId = req.headers["x-tenant-id"] as string
   const userId = req.headers["x-user-id"] as string
   const role = req.headers["x-role"] as string
@@ -50,41 +51,46 @@ router.post("/", async (req, res) => {
     return res.status(401).json({ error: "Missing identity headers" })
   }
 
+  // CHANGE: Enforce admin-only document upload
   if (role !== "admin") {
-    return res.status(403).json({ error: "Only admin can upload documents" })
+    return res.status(403).json({ error: "Only admin users can upload documents" })
   }
 
   if (!fileName || !storageKey) {
-    return res.status(400).json({ error: "Missing fields" })
+    return res.status(400).json({ error: "Missing required fields: fileName, storageKey" })
   }
 
   try {
-    // ✅ DB is source of truth
+    // CHANGE: Store document metadata with admin user context
     const result = await db.query(
       `
       INSERT INTO documents (tenant_id, uploaded_by, file_name, storage_key)
       VALUES ($1, $2, $3, $4)
-      RETURNING id, status
+      RETURNING id, status, created_at
       `,
       [tenantId, userId, fileName, storageKey]
     )
 
     const documentId = result.rows[0].id
 
-    // 🔔 Kafka event (best-effort, non-blocking)
+    // CHANGE: Publish Kafka event for document processing
     publishDocumentUploaded({
       eventId: randomUUID(),
       documentId,
       tenantId,
       storageKey,
-      fileName
+      fileName,
+      uploadedBy: userId
     }).catch(err => {
       console.error("Failed to publish Kafka event", err)
     })
 
     res.json({
       documentId,
-      status: result.rows[0].status
+      status: result.rows[0].status,
+      fileName,
+      createdAt: result.rows[0].created_at,
+      message: "Document uploaded successfully and queued for processing"
     })
   } catch (err) {
     console.error("Create document failed:", err)
@@ -93,35 +99,56 @@ router.post("/", async (req, res) => {
 })
 
 /**
- * List documents for tenant
+ * List documents for tenant (Admin only)
  */
 router.get("/", async (req, res) => {
   const tenantId = req.headers["x-tenant-id"] as string
+  const role = req.headers["x-role"] as string
 
   if (!tenantId) {
     return res.status(401).json({ error: "Missing tenant context" })
   }
 
-  const result = await db.query(
-    `
-    SELECT id, file_name, status, created_at
-    FROM documents
-    WHERE tenant_id = $1
-    ORDER BY created_at DESC
-    `,
-    [tenantId]
-  )
+  // CHANGE: Enforce admin-only document listing
+  if (role !== "admin") {
+    return res.status(403).json({ error: "Only admin users can list documents" })
+  }
 
-  res.json(result.rows)
+  try {
+    const result = await db.query(
+      `
+      SELECT id, file_name, status, created_at, uploaded_by
+      FROM documents
+      WHERE tenant_id = $1
+      ORDER BY created_at DESC
+      `,
+      [tenantId]
+    )
+
+    res.json({
+      documents: result.rows,
+      totalCount: result.rows.length
+    })
+  } catch (err) {
+    console.error("List documents failed:", err)
+    res.status(500).json({ error: "Failed to list documents" })
+  }
 })
 
-// CHANGE: Enhanced search with semantic filtering and relevance scoring
+// CHANGE: Enhanced search with semantic filtering and role-based access (Available to both admin and users)
 router.post("/search", async (req, res) => {
   const tenantId = req.headers["x-tenant-id"] as string
+  const userId = req.headers["x-user-id"] as string
+  const role = req.headers["x-role"] as string
   const { query, embedding, minSimilarity = 0.6, limit = 5, includeMetadata = true } = req.body
 
-  if (!tenantId) {
-    return res.status(401).json({ error: "Missing tenant context" })
+  if (!tenantId || !userId) {
+    return res.status(401).json({ error: "Missing identity headers" })
+  }
+
+  // CHANGE: Allow both admin and user roles to search
+  if (!["admin", "user"].includes(role)) {
+    return res.status(403).json({ error: "Invalid user role for search" })
   }
 
   if (!query || typeof query !== 'string') {
@@ -133,7 +160,7 @@ router.post("/search", async (req, res) => {
   }
 
   try {
-    // CHANGE: Get broader results first for semantic filtering
+    // CHANGE: Get broader results first for semantic filtering with tenant isolation
     const rawResults = await db.query(
       `
       SELECT 
@@ -145,7 +172,7 @@ router.post("/search", async (req, res) => {
         d.created_at
       FROM document_chunks dc
       JOIN documents d ON dc.document_id = d.id
-      WHERE dc.tenant_id = $2
+      WHERE dc.tenant_id = $2 AND d.status = 'ready'
       ORDER BY dc.embedding <=> $1
       LIMIT 50
       `,
@@ -204,12 +231,13 @@ router.post("/search", async (req, res) => {
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .slice(0, limit)
 
-    // CHANGE: Use typed response object to fix TypeScript error
+    // CHANGE: Use typed response object with role-based context
     const response: SearchResponse = {
       query,
       minSimilarity,
       totalResults: filteredResults.length,
       totalScanned: rawResults.rows.length,
+      userRole: role,
       results: filteredResults.map(row => ({
         content: row.content,
         similarity: parseFloat(row.similarity.toFixed(4)),
@@ -232,7 +260,7 @@ router.post("/search", async (req, res) => {
       }))
     }
 
-    // CHANGE: Add search quality indicators - now TypeScript recognizes the property
+    // CHANGE: Add search quality indicators
     if (filteredResults.length > 0) {
       response.searchQuality = {
         avgSimilarity: parseFloat((filteredResults.reduce((sum, r) => sum + r.similarity, 0) / filteredResults.length).toFixed(4)),
@@ -248,17 +276,23 @@ router.post("/search", async (req, res) => {
   }
 })
 
-// CHANGE: Add semantic search suggestions endpoint
+// CHANGE: Add semantic search suggestions endpoint (Available to both admin and users)
 router.post("/search/suggestions", async (req, res) => {
   const tenantId = req.headers["x-tenant-id"] as string
+  const role = req.headers["x-role"] as string
   const { query } = req.body
 
   if (!tenantId || !query) {
     return res.status(400).json({ error: "Missing required parameters" })
   }
 
+  // CHANGE: Allow both admin and user roles to get suggestions
+  if (!["admin", "user"].includes(role)) {
+    return res.status(403).json({ error: "Invalid user role for suggestions" })
+  }
+
   try {
-    // CHANGE: Get document topics and common terms for suggestions
+    // CHANGE: Get document topics and common terms for suggestions with tenant isolation
     const topicsResult = await db.query(
       `
       SELECT DISTINCT d.file_name, 
@@ -280,6 +314,7 @@ router.post("/search/suggestions", async (req, res) => {
 
     res.json({
       query,
+      userRole: role,
       suggestions: suggestions.slice(0, 5)
     })
   } catch (err) {
