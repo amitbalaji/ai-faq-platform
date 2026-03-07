@@ -26,6 +26,7 @@ export async function publishDocumentUploaded(event: {
   tenantId: string
   storageKey: string
   fileName: string
+  uploadedBy: string
 }) {
   await producer.send({
     topic: "document.uploaded",
