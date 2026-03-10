@@ -23,7 +23,7 @@ router.post('/completions', validateChatRequest, async (req, res, next) => {
     
     res.json({
       response,
-      model: model || 'llama2',
+      model: model || 'llama3',
       usage: {
         promptTokens: response.promptTokens || 0,
         completionTokens: response.completionTokens || 0

@@ -72,81 +72,6 @@ app.post("/documents", verifyJWT, requireRole("admin"), async (req, res) => {
   res.status(response.status).json(data)
 })
 
-// CHANGE: User and admin can search documents (read-only for users)
-app.post("/documents/search", verifyJWT, requireRole("user"), async (req, res) => {
-  const user = (req as any).user
-  const { query } = req.body
-
-  if (!query || typeof query !== 'string') {
-    return res.status(400).json({ error: "Query text is required" })
-  }
-
-  try {
-    // CHANGE: Generate embedding via AI service
-    const embeddingResponse = await fetch("http://localhost:3003/embeddings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: query })
-    })
-
-    if (!embeddingResponse.ok) {
-      throw new Error(`AI Service failed: ${embeddingResponse.status}`)
-    }
-
-    const { embedding } = await embeddingResponse.json()
-
-    // CHANGE: Forward search request to document service
-    const searchResponse = await fetch("http://localhost:4004/documents/search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-tenant-id": user.tenantId,
-        "x-user-id": user.userId,
-        "x-role": user.role
-      },
-      body: JSON.stringify({ query, embedding })
-    })
-
-    const searchData = await searchResponse.json()
-    res.status(searchResponse.status).json(searchData)
-
-  } catch (err) {
-    console.error("Search failed:", err)
-    res.status(500).json({ error: "Search failed" })
-  }
-})
-
-// CHANGE: User and admin can access chat functionality
-app.post("/chat/query", verifyJWT, requireRole("user"), async (req, res) => {
-  const user = (req as any).user
-  const { query, conversationId } = req.body
-
-  if (!query || typeof query !== 'string') {
-    return res.status(400).json({ error: "Query text is required" })
-  }
-
-  try {
-    // CHANGE: Forward chat request to chat service with user context
-    const chatResponse = await fetch("http://localhost:3002/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-tenant-id": user.tenantId,
-        "x-user-id": user.userId,
-        "x-role": user.role
-      },
-      body: JSON.stringify({ query, conversationId })
-    })
-
-    const chatData = await chatResponse.json()
-    res.status(chatResponse.status).json(chatData)
-
-  } catch (err) {
-    console.error("Chat failed:", err)
-    res.status(500).json({ error: "Chat failed" })
-  }
-})
-
 // CHANGE: Admin can list documents for their tenant
 app.get("/documents", verifyJWT, requireRole("admin"), async (req, res) => {
   const user = (req as any).user
@@ -168,6 +93,86 @@ app.get("/documents", verifyJWT, requireRole("admin"), async (req, res) => {
   } catch (err) {
     console.error("List documents failed:", err)
     res.status(500).json({ error: "Failed to list documents" })
+  }
+})
+
+// CHANGE: Chat is the only user-facing interface - handles search internally
+app.post("/chat", verifyJWT, requireRole("user"), async (req, res) => {
+  const user = (req as any).user
+  const { query, conversationId } = req.body
+
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: "Query text is required" })
+  }
+
+  try {
+    // CHANGE: Forward chat request to chat service - it handles document search internally
+    const chatResponse = await fetch("http://localhost:3002/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": user.tenantId,
+        "x-user-id": user.userId,
+        "x-role": user.role
+      },
+      body: JSON.stringify({ query, conversationId })
+    })
+
+    const chatData = await chatResponse.json()
+    res.status(chatResponse.status).json(chatData)
+
+  } catch (err) {
+    console.error("Chat failed:", err)
+    res.status(500).json({ error: "Chat failed" })
+  }
+})
+
+// CHANGE: Get conversation history
+app.get("/chat/conversations/:conversationId", verifyJWT, requireRole("user"), async (req, res) => {
+  const user = (req as any).user
+  const { conversationId } = req.params
+
+  try {
+    const response = await fetch(`http://localhost:3002/conversations/${conversationId}`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": user.tenantId,
+        "x-user-id": user.userId,
+        "x-role": user.role
+      }
+    })
+
+    const data = await response.json()
+    res.status(response.status).json(data)
+
+  } catch (err) {
+    console.error("Get conversation failed:", err)
+    res.status(500).json({ error: "Failed to get conversation" })
+  }
+})
+
+// CHANGE: List user conversations
+app.get("/chat/conversations", verifyJWT, requireRole("user"), async (req, res) => {
+  const user = (req as any).user
+
+  try {
+    const response = await fetch("http://localhost:3002/conversations", {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": user.tenantId,
+        "x-user-id": user.userId,
+        "x-role": user.role
+      }
+    })
+
+    const data = await response.json()
+    res.status(response.status).json(data)
+
+  } catch (err) {
+    console.error("List conversations failed:", err)
+    res.status(500).json({ error: "Failed to list conversations" })
   }
 })
 
