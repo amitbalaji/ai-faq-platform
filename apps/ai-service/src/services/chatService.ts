@@ -39,7 +39,7 @@ export class ChatService {
 
     try {
       const response = await this.ollamaClient.generateCompletion({
-        model: model || 'llama2',
+        model: model || 'llama3',
         prompt,
         temperature: temperature || 0.7,
         maxTokens: maxTokens || 2000,
@@ -63,7 +63,7 @@ export class ChatService {
 
     try {
       await this.ollamaClient.generateStreamingCompletion({
-        model: model || 'llama2',
+        model: model || 'llama3',
         prompt,
         temperature: temperature || 0.7,
         maxTokens: maxTokens || 2000,
@@ -77,14 +77,27 @@ export class ChatService {
   }
 
   private buildPrompt(messages: ChatMessage[], context?: string): string {
-    let prompt = ''
-    
+    const systemInstruction = `
+  You are an AI assistant answering questions using internal documents.
+  
+  Rules:
+  - Use ONLY the provided context when possible.
+  - If the answer is not in the context, say you don't know.
+  - Keep answers concise and accurate.
+  `
+
+    let prompt = systemInstruction.trim() + "\n\n"
+
     if (context) {
-      prompt += `Context: ${context}\n\n`
+      prompt += `CONTEXT:\n${context}\n\n`
     }
-    
-    prompt += messages.map(msg => `${msg.role}: ${msg.content}`).join('\n')
-    
+
+    prompt += messages
+      .map(msg => `${msg.role.toUpperCase()}: ${msg.content}`)
+      .join("\n")
+
+    prompt += "\nASSISTANT:"
+
     return prompt
   }
 }
