@@ -3,17 +3,52 @@ import cors from "cors"
 import rateLimit from "express-rate-limit"
 import dotenv from "dotenv"
 import path from "path"
+import { createProxyMiddleware } from 'http-proxy-middleware'
 dotenv.config({
   path: path.resolve(__dirname, "../.env")
 })
 import { verifyJWT } from "./middleware/jwt"
 import { requireRole } from "./middleware/requireRole"
+// CHANGE: Import new security middleware
+import { helmetConfig, customSecurityHeaders } from "./middleware/helmet"
+import { replayWindow } from "./middleware/replayWindow"
+import { validateSDK, requireSDKPermission } from "./middleware/sdkMiddleware"
+import { hmacValidator } from "./middleware/hmacValidation"
 
 dotenv.config()
 
 const app = express()
 
+// CHANGE: Apply security middleware stack
+app.use(helmetConfig)
+app.use(customSecurityHeaders)
 app.use(cors())
+
+// CHANGE: Simplified auth service proxy - no custom headers, just clean forwarding
+const authServiceProxy = createProxyMiddleware({
+  target: process.env.AUTH_SERVICE_URL || 'http://localhost:4001',
+  changeOrigin: true,
+ 
+  onProxyReq: (proxyReq, req, res) => {
+    // CHANGE: Simple logging without complex header manipulation
+    console.log(`Proxying ${req.method} ${req.originalUrl} to auth service`);
+  },
+  onError: (err, req, res) => {
+    console.error(`Auth service proxy error for ${req.originalUrl}:`, err.message);
+    res.status(502).json({ 
+      error: 'Authentication service temporarily unavailable'
+    });
+  },
+  timeout: 30000,
+  proxyTimeout: 30000,
+  // CHANGE: Let http-proxy-middleware handle headers and body automatically
+  secure: false,
+  followRedirects: false
+});
+
+
+app.use('/auth', authServiceProxy)
+
 app.use(express.json())
 
 // Explicitly cast to generic Express handler
@@ -27,6 +62,13 @@ app.use(limiter)
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "api-gateway" })
 })
+
+
+// CHANGE: Protected SDK endpoints with replay protection
+app.use("/api/sdk", replayWindow, validateSDK)
+
+// CHANGE: Webhook endpoints with HMAC validation
+app.use("/webhooks", hmacValidator)
 
 // CHANGE: Admin-only profile access
 app.get("/admin/profile", verifyJWT, requireRole("admin"), (req, res) => {
@@ -93,6 +135,50 @@ app.get("/documents", verifyJWT, requireRole("admin"), async (req, res) => {
   } catch (err) {
     console.error("List documents failed:", err)
     res.status(500).json({ error: "Failed to list documents" })
+  }
+})
+
+// CHANGE: Add document search endpoint for both admin and user roles
+app.post("/documents/search", verifyJWT, requireRole("user"), async (req, res) => {
+  const user = (req as any).user
+  const { query } = req.body
+
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: "Query text is required" })
+  }
+
+  try {
+    // CHANGE: Generate embedding via AI service
+    const embeddingResponse = await fetch("http://localhost:3003/embeddings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: query })
+    })
+
+    if (!embeddingResponse.ok) {
+      throw new Error(`AI Service failed: ${embeddingResponse.status}`)
+    }
+
+    const { embedding } = await embeddingResponse.json()
+
+    // CHANGE: Forward search request to document service
+    const searchResponse = await fetch("http://localhost:4004/documents/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": user.tenantId,
+        "x-user-id": user.userId,
+        "x-role": user.role
+      },
+      body: JSON.stringify({ query, embedding })
+    })
+
+    const searchData = await searchResponse.json()
+    res.status(searchResponse.status).json(searchData)
+
+  } catch (err) {
+    console.error("Search failed:", err)
+    res.status(500).json({ error: "Search failed" })
   }
 })
 
