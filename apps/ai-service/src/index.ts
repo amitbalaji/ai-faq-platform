@@ -17,8 +17,10 @@ app.use(cors())
 app.use(express.json({ limit: '10mb' }))
 app.use(requestLogger)
 
-// Routes
+// CHANGE: Health routes remain public (no authentication required)
 app.use('/health', healthRoutes)
+
+// CHANGE: Protected routes now require authentication
 app.use('/embeddings', embeddingRoutes)
 app.use('/chat', chatRoutes)
 
@@ -33,6 +35,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`🧠 AI Service running on port ${PORT}`)
   console.log(`📊 Health check: http://localhost:${PORT}/health`)
+  console.log(`🔒 Authentication: Required for /embeddings and /chat endpoints`)
 })
 
 export default app
