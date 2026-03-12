@@ -46,8 +46,8 @@ const authServiceProxy = createProxyMiddleware({
   followRedirects: false
 });
 
-
 app.use('/auth', authServiceProxy)
+
 
 app.use(express.json())
 
@@ -62,6 +62,7 @@ app.use(limiter)
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "api-gateway" })
 })
+
 
 
 // CHANGE: Protected SDK endpoints with replay protection
@@ -141,7 +142,7 @@ app.get("/documents", verifyJWT, requireRole("admin"), async (req, res) => {
 // CHANGE: Add document search endpoint for both admin and user roles
 app.post("/documents/search", verifyJWT, requireRole("user"), async (req, res) => {
   const user = (req as any).user
-  const { query } = req.body
+  const { query, model} = req.body
 
   if (!query || typeof query !== 'string') {
     return res.status(400).json({ error: "Query text is required" })
@@ -149,10 +150,14 @@ app.post("/documents/search", verifyJWT, requireRole("user"), async (req, res) =
 
   try {
     // CHANGE: Generate embedding via AI service
-    const embeddingResponse = await fetch("http://localhost:3003/embeddings", {
+    const embeddingResponse = await fetch("http://localhost:4000/embeddings", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: query })
+      headers: { "Content-Type": "application/json",
+        "x-tenant-id": user.tenantId,
+        "x-user-id": user.userId,
+        "x-role": user.role
+       },
+      body: JSON.stringify({ text: query, model })
     })
 
     if (!embeddingResponse.ok) {
@@ -181,6 +186,49 @@ app.post("/documents/search", verifyJWT, requireRole("user"), async (req, res) =
     res.status(500).json({ error: "Search failed" })
   }
 })
+
+app.post("/embeddings", verifyJWT, async (req, res) => {
+  const user = (req as any).user
+  const { text, model } = req.body
+
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: "Text is required for embedding generation" })
+  }
+
+  if (text.length > 8000) {
+    return res.status(400).json({ error: "Text too long (max 8000 characters)" })
+  }
+
+  try {
+    // CHANGE: Call AI service directly for embedding generation
+    const embeddingResponse = await fetch("http://localhost:3003/embeddings", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "x-tenant-id": user.tenantId,
+        "x-user-id": user.userId,
+        "x-role": user.role
+      },
+      body: JSON.stringify({ text, model })
+    })
+
+    if (!embeddingResponse.ok) {
+      const errorData = await embeddingResponse.json().catch(() => ({}))
+      throw new Error(`AI Service failed: ${embeddingResponse.status} - ${errorData.error || 'Unknown error'}`)
+    }
+
+    const embeddingData = await embeddingResponse.json()
+    res.json(embeddingData)
+
+  } catch (err) {
+    console.error("Embedding generation failed:", err)
+    res.status(500).json({ 
+      error: "Failed to generate embedding",
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    })
+  }
+})
+
 
 // CHANGE: Chat is the only user-facing interface - handles search internally
 app.post("/chat", verifyJWT, requireRole("user"), async (req, res) => {

@@ -1,7 +1,7 @@
 import { jwtDecode } from 'jwt-decode';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE = "http://localhost:4001"
+const BASE = "http://localhost:4000"
 const TOKEN_KEY = '@auth_token';
 
 let TOKEN = null
