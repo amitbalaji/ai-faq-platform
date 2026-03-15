@@ -8,8 +8,6 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { api, decodeToken } from '../services/api';
-// CHANGE: Import useAuth hook
 import { useAuth } from '../contexts/AuthContext';
 
 export default function LoginScreen({ navigation }) {
@@ -19,7 +17,7 @@ export default function LoginScreen({ navigation }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // CHANGE: Get login function from auth context
+  // CHANGE: Use login function from auth context
   const { login } = useAuth();
 
   const handleLogin = async () => {
@@ -38,15 +36,13 @@ export default function LoginScreen({ navigation }) {
     try {
       setLoading(true);
 
-      const data = await api.login(emailOrUsername, password);
+      // CHANGE: Use context login method which handles new token structure
+      const result = await login(emailOrUsername, password);
 
-      if (data.error || !data.token) {
-        setError(data.message || 'Invalid credentials. Username or password mismatch.');
+      if (result.error) {
+        setError(result.error);
         return;
       }
-
-      // CHANGE: Use login function from context to store token and update auth state
-      await login(data.token);
 
       // CHANGE: Navigation is now handled automatically by AppNavigator based on auth state
       // No need to manually navigate here

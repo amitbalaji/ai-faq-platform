@@ -5,27 +5,30 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Image,
-  Alert,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function SignupScreen({ navigation }) {
   const [fullName, setFullName] = useState('');
   const [workEmail, setWorkEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [tenantName, setTenantName] = useState('');
+  const [signupType, setSignupType] = useState('user'); // 'admin' or 'user'
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // CHANGE: Use signup function from auth context
+  const { signup } = useAuth();
+
   const handleSignup = async () => {
-    // Clear previous errors
     setError('');
 
-    // Validation
     if (!fullName.trim()) {
       setError('Please enter your full name');
       return;
@@ -36,7 +39,6 @@ export default function SignupScreen({ navigation }) {
       return;
     }
 
-    // Email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(workEmail)) {
       setError('Please enter a valid email address');
@@ -63,35 +65,38 @@ export default function SignupScreen({ navigation }) {
       return;
     }
 
+    // CHANGE: Validate tenant name for admin signup
+    if (signupType === 'admin' && !tenantName.trim()) {
+      setError('Please enter your company name');
+      return;
+    }
+
     try {
       setLoading(true);
       
-      // TODO: Replace with your actual signup API endpoint
-      const response = await fetch('YOUR_API_ENDPOINT/signup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          fullName,
-          email: workEmail,
-          password,
-        }),
-      });
+      // CHANGE: Use context signup method with new structure
+      const signupData = {
+        email: workEmail,
+        password,
+        signupType,
+        ...(signupType === 'admin' && { tenantName }),
+        ...(signupType === 'user' && tenantName && { tenantName })
+      };
 
-      const data = await response.json();
+      const result = await signup(signupData);
 
-      if (!response.ok) {
-        // Handle signup failure
-        setError(data.message || 'Signup failed. Please try again.');
+      if (result.error) {
+        setError(result.error);
         return;
       }
 
-      // Success - navigate to login or main app
+      // CHANGE: Show success message and navigate
       Alert.alert('Success', 'Account created successfully!', [
         {
           text: 'OK',
-          onPress: () => navigation.navigate('Login'),
+          onPress: () => {
+            // Navigation handled automatically by auth state change
+          },
         },
       ]);
     } catch (err) {
@@ -103,17 +108,16 @@ export default function SignupScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* Header with back button */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={styles.backButton}
         >
+          <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Sign Up</Text>
       </View>
 
-      {/* AI Powered Badge */}
       <View style={styles.badgeContainer}>
         <View style={styles.badge}>
           <Ionicons name="sparkles" size={16} color="#4A90E2" />
@@ -121,14 +125,47 @@ export default function SignupScreen({ navigation }) {
         </View>
       </View>
 
-      {/* Main Content */}
       <View style={styles.content}>
         <Text style={styles.title}>Join the AI Revolution</Text>
         <Text style={styles.subtitle}>
           Create an account to access our intelligent FAQ and chatbot assistant.
         </Text>
 
-        {/* Error Message */}
+        {/* CHANGE: Add signup type selector */}
+        <View style={styles.signupTypeContainer}>
+          <Text style={styles.label}>Account Type</Text>
+          <View style={styles.signupTypeButtons}>
+            <TouchableOpacity
+              style={[
+                styles.signupTypeButton,
+                signupType === 'admin' && styles.signupTypeButtonActive
+              ]}
+              onPress={() => setSignupType('admin')}
+            >
+              <Text style={[
+                styles.signupTypeButtonText,
+                signupType === 'admin' && styles.signupTypeButtonTextActive
+              ]}>
+                Admin (Create Organization)
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.signupTypeButton,
+                signupType === 'user' && styles.signupTypeButtonActive
+              ]}
+              onPress={() => setSignupType('user')}
+            >
+              <Text style={[
+                styles.signupTypeButtonText,
+                signupType === 'user' && styles.signupTypeButtonTextActive
+              ]}>
+                User (Join Organization)
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {error ? (
           <View style={styles.errorContainer}>
             <Ionicons name="alert-circle" size={20} color="#FF6B6B" />
@@ -136,7 +173,6 @@ export default function SignupScreen({ navigation }) {
           </View>
         ) : null}
 
-        {/* Full Name Input */}
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Full Name</Text>
           <View style={styles.inputWrapper}>
@@ -153,7 +189,6 @@ export default function SignupScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Work Email Input */}
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Work Email</Text>
           <View style={styles.inputWrapper}>
@@ -171,7 +206,25 @@ export default function SignupScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Password Input */}
+        {/* CHANGE: Show company name field based on signup type */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>
+            {signupType === 'admin' ? 'Company Name (Required)' : 'Company Name (Optional)'}
+          </Text>
+          <View style={styles.inputWrapper}>
+            <TextInput
+              style={styles.input}
+              placeholder={signupType === 'admin' ? 'Your company name' : 'Company name for auto-join'}
+              placeholderTextColor="#6B7280"
+              value={tenantName}
+              onChangeText={setTenantName}
+              autoCapitalize="words"
+              editable={!loading}
+            />
+            <Ionicons name="business-outline" size={20} color="#6B7280" />
+          </View>
+        </View>
+
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Password</Text>
           <View style={styles.inputWrapper}>
@@ -195,7 +248,6 @@ export default function SignupScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Confirm Password Input */}
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Confirm Password</Text>
           <View style={styles.inputWrapper}>
@@ -221,7 +273,6 @@ export default function SignupScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Create Account Button */}
         <TouchableOpacity
           style={[styles.button, loading && styles.buttonDisabled]}
           onPress={handleSignup}
@@ -237,14 +288,12 @@ export default function SignupScreen({ navigation }) {
           )}
         </TouchableOpacity>
 
-        {/* Terms and Privacy */}
         <Text style={styles.termsText}>
           By signing up, you agree to our{' '}
           <Text style={styles.link}>Terms of Service</Text> &{' '}
           <Text style={styles.link}>Privacy Policy</Text>.
         </Text>
 
-        {/* Login Link */}
         <View style={styles.loginContainer}>
           <Text style={styles.loginText}>Already have an account? </Text>
           <TouchableOpacity onPress={() => navigation.navigate('Login')}>
@@ -264,7 +313,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 20,
+    paddingTop: 50,
     paddingHorizontal: 20,
     paddingBottom: 20,
   },
@@ -313,6 +362,35 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center',
     lineHeight: 20,
+  },
+  // CHANGE: Add styles for signup type selector
+  signupTypeContainer: {
+    marginBottom: 20,
+  },
+  signupTypeButtons: {
+    flexDirection: 'column',
+    gap: 8,
+  },
+  signupTypeButton: {
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  signupTypeButtonActive: {
+    backgroundColor: 'rgba(74, 144, 226, 0.1)',
+    borderColor: '#4A90E2',
+  },
+  signupTypeButtonText: {
+    color: '#94A3B8',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  signupTypeButtonTextActive: {
+    color: '#4A90E2',
   },
   errorContainer: {
     flexDirection: 'row',

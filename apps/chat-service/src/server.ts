@@ -38,7 +38,7 @@ interface DocumentChunk {
 }
 
 // CHANGE: Generate embedding for user query with comprehensive error handling
-async function generateEmbedding(text: string): Promise<number[]> {
+async function generateEmbedding(text: string,tenantId:string, userId:string,role:string): Promise<number[]> {
   const aiServiceUrl = process.env.AI_SERVICE_URL || "http://localhost:3003"
 
   try {
@@ -47,7 +47,12 @@ async function generateEmbedding(text: string): Promise<number[]> {
 
     const response = await fetch(`${aiServiceUrl}/embeddings`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        "x-tenant-id": tenantId,
+        "x-user-id": userId,
+        "x-role": role
+       },
       body: JSON.stringify({ text }),
       signal: controller.signal
     })
@@ -94,10 +99,10 @@ async function generateEmbedding(text: string): Promise<number[]> {
 }
 
 // CHANGE: Retrieve relevant document chunks for context
-async function retrieveContext(query: string, tenantId: string, limit: number = 3): Promise<DocumentChunk[]> {
+async function retrieveContext(query: string, tenantId: string,userId:string,role:string, limit: number = 3): Promise<DocumentChunk[]> {
   try {
     // Generate embedding for the query
-    const embedding = await generateEmbedding(query)
+    const embedding = await generateEmbedding(query, tenantId,userId,role)
 
     if (embedding.length === 0) {
       console.warn("No embedding generated, skipping context retrieval")
@@ -137,7 +142,9 @@ async function retrieveContext(query: string, tenantId: string, limit: number = 
 }
 
 // CHANGE: Generate AI response with context and comprehensive fallback handling
-async function generateAIResponse(query: string, context: DocumentChunk[], conversationHistory: ChatMessage[]): Promise<string> {
+async function generateAIResponse(query: string, context: DocumentChunk[], conversationHistory: ChatMessage[],
+  tenantId:string, userId:string,role:string
+): Promise<string> {
   const aiServiceUrl = process.env.AI_SERVICE_URL || "http://localhost:3003"
 
   const contextText = context.map(chunk =>
@@ -166,7 +173,11 @@ Please provide a helpful response based on the context and conversation history.
 
     const response = await fetch(`${aiServiceUrl}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json',
+        "x-tenant-id": tenantId,
+        "x-user-id": userId,
+        "x-role": role
+       },
       body: JSON.stringify({
         messages: [
           {
@@ -343,6 +354,8 @@ app.post("/chat", async (req, res) => {
   const role = req.headers["x-role"] as string
   const { query, conversationId } = req.body
 
+  console.log(req.headers['Authorization']);
+
   if (!tenantId || !userId) {
     return res.status(401).json({ error: "Missing identity headers" })
   }
@@ -366,7 +379,7 @@ app.post("/chat", async (req, res) => {
     const conversationHistory = await getConversationHistory(finalConversationId, tenantId)
 
     // CHANGE: Automatically retrieve relevant context from documents
-    const context = await retrieveContext(query, tenantId)
+    const context = await retrieveContext(query, tenantId, userId,role)
 
     // CHANGE: Save user message
     await saveChatMessage({
@@ -379,7 +392,7 @@ app.post("/chat", async (req, res) => {
     })
 
     // CHANGE: Generate AI response with context
-    const aiResponse = await generateAIResponse(query, context, conversationHistory)
+    const aiResponse = await generateAIResponse(query, context, conversationHistory,tenantId,userId,role)
 
     // CHANGE: Save AI response
     await saveChatMessage({

@@ -9,6 +9,7 @@ dotenv.config({
 import jwt from "jsonwebtoken"
 import { db } from "./db"
 import { randomUUID } from "crypto"
+import crypto from "crypto"
 
 console.log("Loaded DB URL:", process.env.DATABASE_URL)
 dotenv.config()
@@ -43,21 +44,18 @@ function generateTokenPair(userId: string, tenantId: string, role: string) {
 
   return { accessToken, refreshToken }
 }
+function hashToken(token: string) {
+  return crypto.createHash("sha256").update(token).digest("hex")
+}
 
 // CHANGE: Helper function to store refresh token
 async function storeRefreshToken(userId: string, refreshToken: string, expiresAt: Date) {
+  const hashedToken = hashToken(refreshToken)
   try {
-    // CHANGE: Invalidate existing refresh tokens for this user
     await db.query(
-      "UPDATE refresh_tokens SET is_active = false WHERE user_id = $1 AND is_active = true",
-      [userId]
-    )
-
-    // CHANGE: Store new refresh token
-    await db.query(
-      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, is_active, created_at) 
+      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, is_active, created_at)
        VALUES ($1, $2, $3, true, NOW())`,
-      [userId, refreshToken, expiresAt]
+      [userId, hashedToken, expiresAt]
     )
   } catch (error) {
     console.error("Error storing refresh token:", error)
@@ -226,7 +224,7 @@ app.post("/auth/login", async (req, res) => {
     if (!user.rows.length) {
       return res.status(401).json({ error: "Invalid credentials" })
     }
-lo
+
     const valid = await bcrypt.compare(password, user.rows[0].password_hash)
 
     if (!valid) {
@@ -258,14 +256,16 @@ lo
 // CHANGE: Add refresh token endpoint
 app.post("/auth/refresh", async (req, res) => {
   try {
+
     const { refreshToken } = req.body
 
     if (!refreshToken) {
       return res.status(400).json({ error: "Refresh token required" })
     }
 
-    // CHANGE: Verify refresh token
     let decoded
+
+    // Verify refresh token
     try {
       decoded = jwt.verify(refreshToken, REFRESH_SECRET) as any
     } catch (error) {
@@ -276,26 +276,41 @@ app.post("/auth/refresh", async (req, res) => {
       return res.status(401).json({ error: "Invalid token type" })
     }
 
-    // CHANGE: Check if refresh token exists and is active in database
+    // Check token exists in DB
+    const hashedToken = hashToken(refreshToken)
+
     const storedToken = await db.query(
-      `SELECT rt.user_id, rt.expires_at, u.tenant_id, u.role 
-       FROM refresh_tokens rt
-       JOIN users u ON rt.user_id = u.id
-       WHERE rt.token_hash = $1 AND rt.is_active = true AND rt.expires_at > NOW()`,
-      [refreshToken]
+      `SELECT rt.user_id, rt.expires_at, u.tenant_id, u.role
+        FROM refresh_tokens rt
+        JOIN users u ON rt.user_id = u.id
+        WHERE rt.token_hash = $1
+        AND rt.is_active = true
+        AND rt.expires_at > NOW()`,
+      [hashedToken]
     )
 
     if (!storedToken.rows.length) {
-      return res.status(401).json({ error: "Refresh token not found or expired" })
+      return res.status(401).json({
+        error: "Refresh token not found or expired"
+      })
     }
 
     const { user_id: userId, tenant_id: tenantId, role } = storedToken.rows[0]
 
-    // CHANGE: Generate new token pair (refresh token rotation)
-    const { accessToken, refreshToken: newRefreshToken } = generateTokenPair(userId, tenantId, role)
+    // Invalidate the used refresh token
+    await db.query(
+      "UPDATE refresh_tokens SET is_active = false WHERE token_hash = $1",
+      [hashedToken]
+    )
 
-    // CHANGE: Store new refresh token and invalidate old one
-    const newRefreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
+    // Generate new tokens
+    const { accessToken, refreshToken: newRefreshToken } =
+      generateTokenPair(userId, tenantId, role)
+
+    const newRefreshExpiresAt =
+      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+
+    // Store the new refresh token
     await storeRefreshToken(userId, newRefreshToken, newRefreshExpiresAt)
 
     res.json({
@@ -306,8 +321,13 @@ app.post("/auth/refresh", async (req, res) => {
     })
 
   } catch (err) {
+
     console.error("Refresh token error:", err)
-    res.status(500).json({ error: "Token refresh failed" })
+
+    res.status(500).json({
+      error: "Token refresh failed"
+    })
+
   }
 })
 
@@ -320,7 +340,7 @@ app.post("/auth/logout", async (req, res) => {
       // CHANGE: Invalidate the specific refresh token
       await db.query(
         "UPDATE refresh_tokens SET is_active = false WHERE token_hash = $1",
-        [refreshToken]
+        [hashToken(refreshToken)]
       )
     }
 

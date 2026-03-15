@@ -17,19 +17,17 @@ export default function AdminUploadScreen({ navigation, route }) {
   const { user } = route.params || {};
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState('');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   const { logout } = useAuth();
 
-  // CHANGE: Updated logout handler with better error handling and logging
   const handleLogout = async () => {
     console.log("LOGOUT CLICKED");
   
     try {
       setShowSettingsModal(false);
-  
       await logout();
-  
       console.log("Logout completed");
     } catch (error) {
       console.error("Logout failed:", error);
@@ -43,8 +41,8 @@ export default function AdminUploadScreen({ navigation, route }) {
         copyToCacheDirectory: true,
       });
 
-      if (result.type === 'success') {
-        if (result.size > 25 * 1024 * 1024) {
+      if (!result.canceled) {
+        if (result.assets[0].size > 25 * 1024 * 1024) {
           Alert.alert('File Too Large', 'Maximum file size is 25MB');
           return;
         }
@@ -55,6 +53,7 @@ export default function AdminUploadScreen({ navigation, route }) {
     }
   };
 
+  // CHANGE: Complete upload workflow with presigned URL, S3 upload, document creation, and embedding
   const handleUpload = async () => {
     if (!selectedFile) {
       Alert.alert('No File Selected', 'Please select a file to upload');
@@ -63,27 +62,53 @@ export default function AdminUploadScreen({ navigation, route }) {
 
     try {
       setUploading(true);
-      
-      const response = await api.upload(selectedFile.name);
+      setUploadProgress('Getting upload URL...');
 
-      if (response.error) {
-        Alert.alert('Upload Failed', response.message || 'Failed to upload document');
-        return;
+      // CHANGE: Step 1 - Get presigned URL from API Gateway
+      const presignedResponse = await api.getPresignedUrl(selectedFile.assets[0].name, selectedFile.assets[0].mimeType);
+
+      if (presignedResponse.error) {
+        throw new Error(presignedResponse.error || 'Failed to get upload URL');
       }
 
-      Alert.alert('Success', 'Document uploaded successfully!', [
-        {
-          text: 'OK',
-          onPress: () => {
-            setSelectedFile(null);
-            navigation.navigate('Chat', { user });
-          },
-        },
-      ]);
+      const { uploadUrl, storageKey } = presignedResponse;
+      setUploadProgress('Uploading to cloud storage...');
+
+      // CHANGE: Step 2 - Upload file to S3 using presigned URL
+      const fileBlob = await fetch(selectedFile.assets[0].uri).then(r => r.blob());
+      await api.uploadToS3(uploadUrl, fileBlob);
+
+      setUploadProgress('Creating document record...');
+
+      // CHANGE: Step 3 - Create document metadata in document service
+      const documentResponse = await api.createDocument(selectedFile.assets[0].name, storageKey);
+
+      if (documentResponse.error) {
+        throw new Error(documentResponse.error || 'Failed to create document record');
+      }
+
+      setUploadProgress('Processing document for search...');
+
+      // CHANGE: Document service automatically triggers embedding processing via Kafka
+      // No need to manually call embedding service - it's handled by the document service
+
+      console.warn(
+        'Success',
+        'Document uploaded successfully and is being processed for search!'
+      );
+      
+      setSelectedFile(null);
+      setUploadProgress('');
+      navigation.navigate('Chat', { user });
     } catch (err) {
-      Alert.alert('Error', 'Network error. Please try again.');
+      console.error('Upload error:', err);
+      Alert.alert(
+        'Upload Failed', 
+        err.message || 'Failed to upload document. Please try again.'
+      );
     } finally {
       setUploading(false);
+      setUploadProgress('');
     }
   };
 
@@ -125,57 +150,69 @@ export default function AdminUploadScreen({ navigation, route }) {
         <TouchableOpacity style={styles.button} onPress={handleFilePicker}>
           <Text style={styles.buttonText}>Select Files</Text>
         </TouchableOpacity>
+
+        {/* CHANGE: Show selected file info */}
+        {selectedFile && (
+          <View style={styles.selectedFileContainer}>
+            <Text style={styles.selectedFileText}>
+              Selected: {selectedFile.name}
+            </Text>
+            <Text style={styles.selectedFileSize}>
+              Size: {(selectedFile.assets[0].size / 1024 / 1024).toFixed(2)} MB
+            </Text>
+          </View>
+        )}
       </View>
 
-      {selectedFile && (
+      {/* CHANGE: Show upload progress */}
+      {uploading && (
+        <View style={styles.progressContainer}>
+          <ActivityIndicator size="large" color="#4DA3FF" />
+          <Text style={styles.progressText}>{uploadProgress}</Text>
+        </View>
+      )}
+
+      {selectedFile && !uploading && (
         <TouchableOpacity
-          style={[styles.uploadButton, uploading && styles.uploadButtonDisabled]}
+          style={[styles.uploadButton]}
           onPress={handleUpload}
-          disabled={uploading}
         >
-          {uploading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.uploadButtonText}>Upload Document</Text>
-          )}
+          <Text style={styles.uploadButtonText}>Upload Document</Text>
         </TouchableOpacity>
       )}
 
-<Modal
-  visible={showSettingsModal}
-  transparent
-  animationType="fade"
-  onRequestClose={() => setShowSettingsModal(false)}
->
-  <View style={styles.modalOverlay}>
-
-    {/* Tap outside to close */}
-    <TouchableOpacity
-      style={StyleSheet.absoluteFill}
-      onPress={() => setShowSettingsModal(false)}
-    />
-
-    <View style={styles.modalContent}>
-      <Text style={styles.modalTitle}>Settings</Text>
-
-      <TouchableOpacity
-        style={styles.modalOption}
-        onPress={handleLogout}
+      <Modal
+        visible={showSettingsModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSettingsModal(false)}
       >
-        <Ionicons name="log-out-outline" size={24} color="#FF6B6B" />
-        <Text style={styles.modalOptionTextLogout}>Logout</Text>
-      </TouchableOpacity>
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            onPress={() => setShowSettingsModal(false)}
+          />
 
-      <TouchableOpacity
-        style={styles.modalCancelButton}
-        onPress={() => setShowSettingsModal(false)}
-      >
-        <Text style={styles.modalCancelText}>Cancel</Text>
-      </TouchableOpacity>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Settings</Text>
 
-    </View>
-  </View>
-</Modal>
+            <TouchableOpacity
+              style={styles.modalOption}
+              onPress={handleLogout}
+            >
+              <Ionicons name="log-out-outline" size={24} color="#FF6B6B" />
+              <Text style={styles.modalOptionTextLogout}>Logout</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalCancelButton}
+              onPress={() => setShowSettingsModal(false)}
+            >
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -260,6 +297,41 @@ const styles = StyleSheet.create({
     fontWeight: "600"
   },
 
+  // CHANGE: Add styles for selected file display
+  selectedFileContainer: {
+    marginTop: 20,
+    padding: 15,
+    backgroundColor: "#1E293B",
+    borderRadius: 8,
+    width: '100%',
+  },
+
+  selectedFileText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "500"
+  },
+
+  selectedFileSize: {
+    color: "#8FA3B8",
+    fontSize: 12,
+    marginTop: 4
+  },
+
+  // CHANGE: Add styles for upload progress
+  progressContainer: {
+    marginTop: 30,
+    alignItems: 'center',
+    padding: 20,
+  },
+
+  progressText: {
+    color: "#8FA3B8",
+    marginTop: 10,
+    fontSize: 14,
+    textAlign: 'center'
+  },
+
   backButton: {
     width: 40,
   },
@@ -271,10 +343,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 24,
-  },
-
-  uploadButtonDisabled: {
-    opacity: 0.6,
   },
 
   uploadButtonText: {

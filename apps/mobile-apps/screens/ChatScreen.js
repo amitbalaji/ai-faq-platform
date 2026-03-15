@@ -4,166 +4,120 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  ScrollView,
   StyleSheet,
-  FlatList,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
-  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../services/api';
-// CHANGE: Import useAuth hook for logout functionality
-import { useAuth } from '../contexts/AuthContext';
 
-export default function ChatScreen({ route, navigation }) {
+export default function ChatScreen({ navigation, route }) {
   const { user } = route.params || {};
-  const [messages, setMessages] = useState([
-    {
-      id: '1',
-      text: "Hello! I'm your AI assistant. How can I help you today?",
-      sender: 'bot',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      suggestions: ['Reset Password', 'Pricing Info', 'Contact Support'],
-    },
-  ]);
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
-  const [conversationId, setConversationId] = useState(null);
-  const [loading, setLoading] = useState(false);
-  // CHANGE: Added state for settings modal visibility
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const flatListRef = useRef(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const scrollViewRef = useRef(null);
 
-  // CHANGE: Get logout function from auth context
-  const { logout } = useAuth();
-
+  // Auto-scroll to bottom when new messages are added
   useEffect(() => {
-    // Scroll to bottom when messages change
-    if (flatListRef.current && messages.length > 0) {
-      flatListRef.current.scrollToEnd({ animated: true });
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollToEnd({ animated: true });
     }
   }, [messages]);
 
-  // CHANGE: Added logout handler with confirmation
-  const handleLogout = async () => {
-    console.log("LOGOUT CLICKED");
-  
-    try {
-      setShowSettingsModal(false);
-  
-      await logout();
-  
-      console.log("Logout completed");
-    } catch (error) {
-      console.error("Logout failed:", error);
-    }
-  };
-
-  const handleSend = async () => {
-    if (!inputText.trim() || loading) return;
+  const sendMessage = async () => {
+    if (!inputText.trim() || isLoading) return;
 
     const userMessage = {
       id: Date.now().toString(),
-      text: inputText,
+      text: inputText.trim(),
       sender: 'user',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    // Add user message immediately
+    setMessages(prev => [...prev, userMessage]);
+    const currentInput = inputText.trim();
     setInputText('');
-    setLoading(true);
+    setIsLoading(true);
 
     try {
-      const response = await api.chat(inputText, conversationId);
+      // Call chat API
+      const response = await api.chat(currentInput);
 
-      if (response.error) {
-        throw new Error(response.message || 'Failed to get response');
-      }
+      // CHANGE: Extract response text from the 'response' field in API response
+      const assistantText = response.response || 'Sorry, I could not generate a response.';
 
-      // Update conversation ID if this is the first message
-      if (!conversationId && response.conversationId) {
-        setConversationId(response.conversationId);
-      }
-
-      const botMessage = {
+      const assistantMessage = {
         id: (Date.now() + 1).toString(),
-        text: response.answer || response.message || 'I apologize, but I could not process your request.',
-        sender: 'bot',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        text: assistantText,
+        sender: 'assistant',
+        timestamp: new Date(),
+        conversationId: response.conversationId,
+        metadata: response.metadata,
       };
 
-      setMessages((prev) => [...prev, botMessage]);
-    } catch (err) {
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      console.error('Chat error:', error);
+
       const errorMessage = {
         id: (Date.now() + 1).toString(),
-        text: 'Sorry, I encountered an error. Please try again.',
-        sender: 'bot',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        text: 'Sorry, there was an error processing your message. Please try again.',
+        sender: 'assistant',
+        timestamp: new Date(),
+        isError: true,
       };
-      setMessages((prev) => [...prev, errorMessage]);
+
+      setMessages(prev => [...prev, errorMessage]);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  const handleSuggestionPress = (suggestion) => {
-    setInputText(suggestion);
-  };
-
-  const handleRegenerateResponse = () => {
-    // Get the last user message
-    const lastUserMessage = [...messages].reverse().find((msg) => msg.sender === 'user');
-    if (lastUserMessage) {
-      setInputText(lastUserMessage.text);
-      handleSend();
-    }
-  };
-
-  const renderMessage = ({ item }) => {
-    const isBot = item.sender === 'bot';
+  const renderMessage = (message) => {
+    const isUser = message.sender === 'user';
 
     return (
-      <View style={styles.messageContainer}>
-        {isBot && (
-          <View style={styles.botHeader}>
-            <View style={styles.botAvatar}>
-              <Ionicons name="chatbubbles" size={20} color="#4A90E2" />
-            </View>
-            <View>
-              <Text style={styles.botName}>AI Assistant</Text>
-              <Text style={styles.botStatus}>Online</Text>
-            </View>
-          </View>
-        )}
+      <View
+        key={message.id}
+        style={[
+          styles.messageContainer,
+          isUser ? styles.userMessage : styles.assistantMessage,
+        ]}
+      >
 
-        <View style={[styles.messageBubble, isBot ? styles.botBubble : styles.userBubble]}>
-          <Text style={[styles.messageText, isBot ? styles.botText : styles.userText]}>
-            {item.text}
+        <Text style={[
+          styles.senderLabel,
+          isUser ? styles.userLabel : styles.assistantLabel
+        ]}>
+          {isUser ? "You" : "Assistant"}
+        </Text>
+        <View
+          style={[
+            styles.messageBubble,
+            isUser ? styles.userBubble : styles.assistantBubble,
+            message.isError && styles.errorBubble,
+          ]}
+        >
+          <Text
+            style={[
+              styles.messageText,
+              isUser ? styles.userText : styles.assistantText,
+              message.isError && styles.errorText,
+            ]}
+          >
+            {message.text}
           </Text>
-        </View>
-
-        <View style={styles.messageFooter}>
           <Text style={styles.timestamp}>
-            {isBot ? 'AI Assistant' : 'You'} • {item.timestamp}
+            {message.timestamp.toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit'
+            })}
           </Text>
         </View>
-
-        {/* Suggestion Buttons */}
-        {isBot && item.suggestions && (
-          <View style={styles.suggestionsContainer}>
-            {item.suggestions.map((suggestion, index) => (
-              <TouchableOpacity
-                key={index}
-                style={styles.suggestionButton}
-                onPress={() => handleSuggestionPress(suggestion)}
-              >
-                <Ionicons name="refresh-outline" size={16} color="#4A90E2" />
-                <Text style={styles.suggestionText}>{suggestion}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
       </View>
     );
   };
@@ -172,124 +126,84 @@ export default function ChatScreen({ route, navigation }) {
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+    //keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.avatarContainer}>
-            <Ionicons name="chatbubbles" size={24} color="#4A90E2" />
-          </View>
-          <View>
-            <Text style={styles.headerTitle}>AI Assistant</Text>
-            <Text style={styles.headerSubtitle}>Online</Text>
-          </View>
-        </View>
-        {/* CHANGE: Added settings button that opens modal */}
-        <TouchableOpacity 
-          style={styles.menuButton}
-          onPress={() => setShowSettingsModal(true)}
-        >
-          <Ionicons name="settings-outline" size={24} color="#fff" />
-        </TouchableOpacity>
-      </View>
-
-      {/* Username Display - Top Left */}
-      <View style={styles.userInfo}>
-        <Text style={styles.username}>{user?.name || user?.email || 'User'}</Text>
-      </View>
-
-      {/* Date Separator */}
-      <View style={styles.dateSeparator}>
-        <Text style={styles.dateText}>Today</Text>
-      </View>
-
-      {/* Messages List */}
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.messagesList}
-        showsVerticalScrollIndicator={false}
-      />
-
-      {/* Action Buttons */}
-      {messages.length > 1 && (
-        <View style={styles.actionButtons}>
-          <TouchableOpacity style={styles.actionButton} onPress={handleRegenerateResponse}>
-            <Text style={styles.actionButtonText}>Regenerate response</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton}>
-            <Text style={styles.actionButtonText}>Tell me more</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Input Area */}
-      <View style={styles.inputContainer}>
-        <TouchableOpacity style={styles.addButton}>
-          <Ionicons name="add-circle-outline" size={24} color="#6B7280" />
-        </TouchableOpacity>
-        <TextInput
-          style={styles.input}
-          placeholder="Type a message..."
-          placeholderTextColor="#6B7280"
-          value={inputText}
-          onChangeText={setInputText}
-          multiline
-          maxLength={500}
-        />
         <TouchableOpacity
-          style={[styles.sendButton, (!inputText.trim() || loading) && styles.sendButtonDisabled]}
-          onPress={handleSend}
-          disabled={!inputText.trim() || loading}
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
         >
-          {loading ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Ionicons name="send" size={20} color="#fff" />
-          )}
+          <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
+        <Text style={styles.headerTitle}>AI Assistant</Text>
+        <View style={styles.headerRight} />
       </View>
 
-      {/* Disclaimer */}
-      <Text style={styles.disclaimer}>
-        AI can make mistakes. Please verify important information.
-      </Text>
+      {/* CHANGE: Scrollable chat messages container */}
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.messagesContainer}
+        contentContainerStyle={styles.messagesContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
 
-      {/* CHANGE: Added Settings Modal */}
-      <Modal
-        visible={showSettingsModal}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowSettingsModal(false)}
       >
-        <TouchableOpacity 
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowSettingsModal(false)}
-        >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Settings</Text>
-            
-            <TouchableOpacity 
-              style={styles.modalOption}
-              onPress={handleLogout}
-            >
-              <Ionicons name="log-out-outline" size={24} color="#FF6B6B" />
-              <Text style={styles.modalOptionTextLogout}>Logout</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.modalCancelButton}
-              onPress={() => setShowSettingsModal(false)}
-            >
-              <Text style={styles.modalCancelText}>Cancel</Text>
-            </TouchableOpacity>
+        {messages.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="chatbubbles-outline" size={64} color="#4A5568" />
+            <Text style={styles.emptyStateText}>
+              Start a conversation with your AI assistant
+            </Text>
+            <Text style={styles.emptyStateSubtext}>
+              Ask questions about your documents or get help with any topic
+            </Text>
           </View>
-        </TouchableOpacity>
-      </Modal>
+        ) : (
+          messages.map(renderMessage)
+        )}
+
+        {/* Loading indicator for assistant response */}
+        {isLoading && (
+          <View style={[styles.messageContainer, styles.assistantMessage]}>
+            <View style={[styles.messageBubble, styles.assistantBubble, styles.loadingBubble]}>
+              <ActivityIndicator size="small" color="#4A90E2" />
+              <Text style={styles.loadingText}>AI is thinking...</Text>
+            </View>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* CHANGE: Static input container at bottom */}
+      <View style={styles.inputContainer}>
+        <View style={styles.inputWrapper}>
+          <TextInput
+            style={styles.textInput}
+            value={inputText}
+            onChangeText={setInputText}
+            placeholder="Type your message..."
+            placeholderTextColor="#8FA3B8"
+            multiline
+            maxLength={1000}
+            editable={!isLoading}
+          />
+          <TouchableOpacity
+            style={[
+              styles.sendButton,
+              (!inputText.trim() || isLoading) && styles.sendButtonDisabled
+            ]}
+            onPress={sendMessage}
+            disabled={!inputText.trim() || isLoading}
+          >
+            {isLoading ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Ionicons name="send" size={20} color="white" />
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
     </KeyboardAvoidingView>
   );
 }
@@ -297,253 +211,167 @@ export default function ChatScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
+    backgroundColor: '#081725',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 50,
     paddingHorizontal: 20,
-    paddingBottom: 16,
+    paddingTop: 50,
+    paddingBottom: 15,
+    backgroundColor: '#081725',
     borderBottomWidth: 1,
     borderBottomColor: '#1E293B',
   },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  avatarContainer: {
+  backButton: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(74, 144, 226, 0.1)',
-    alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(74, 144, 226, 0.3)',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 16,
+    color: 'white',
+    fontSize: 18,
     fontWeight: '600',
-    color: '#fff',
   },
-  headerSubtitle: {
-    fontSize: 12,
-    color: '#10B981',
-    marginTop: 2,
+  headerRight: {
+    width: 40,
   },
-  menuButton: {
-    padding: 4,
+  // CHANGE: Scrollable messages container
+  messagesContainer: {
+    flex: 1,
+    backgroundColor: '#081725',
+    maxHeight: 590
   },
-  userInfo: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+  messagesContent: {
+    padding: 20,
+    paddingBottom: 10,
+    flexGrow: 1
   },
-  username: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#94A3B8',
-  },
-  dateSeparator: {
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 16,
+    paddingVertical: 60,
   },
-  dateText: {
-    fontSize: 12,
-    color: '#6B7280',
-    backgroundColor: '#1E293B',
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 12,
+  emptyStateText: {
+    color: '#E2E8F0',
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 20,
+    textAlign: 'center',
   },
-  messagesList: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
+  emptyStateSubtext: {
+    color: '#8FA3B8',
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+    paddingHorizontal: 40,
   },
   messageContainer: {
-    marginBottom: 24,
+    marginBottom: 16,
   },
-  botHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
+  userMessage: {
+    alignItems: 'flex-end',
   },
-  botAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(74, 144, 226, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(74, 144, 226, 0.3)',
-  },
-  botName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  botStatus: {
-    fontSize: 11,
-    color: '#10B981',
+  assistantMessage: {
+    alignItems: 'flex-start',
   },
   messageBubble: {
-    borderRadius: 12,
-    padding: 16,
-    maxWidth: '85%',
-  },
-  botBubble: {
-    backgroundColor: '#1E293B',
-    alignSelf: 'flex-start',
+    maxWidth: '80%',
+    padding: 12,
+    borderRadius: 16,
   },
   userBubble: {
     backgroundColor: '#4A90E2',
-    alignSelf: 'flex-end',
+    borderBottomRightRadius: 4,
   },
-  messageText: {
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  botText: {
-    color: '#E2E8F0',
-  },
-  userText: {
-    color: '#fff',
-  },
-  messageFooter: {
-    marginTop: 6,
-  },
-  timestamp: {
-    fontSize: 11,
-    color: '#6B7280',
-  },
-  suggestionsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 12,
-    gap: 8,
-  },
-  suggestionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  assistantBubble: {
     backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    borderBottomLeftRadius: 4,
   },
-  suggestionText: {
-    fontSize: 13,
-    color: '#4A90E2',
-    marginLeft: 6,
+  errorBubble: {
+    backgroundColor: '#DC2626',
   },
-  actionButtons: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  actionButton: {
-    backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-  actionButtonText: {
-    fontSize: 14,
-    color: '#94A3B8',
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#1E293B',
-    backgroundColor: '#0F172A',
-  },
-  addButton: {
-    marginRight: 12,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: '#1E293B',
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    color: '#fff',
-    fontSize: 15,
-    maxHeight: 100,
-  },
-  sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#4A90E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 12,
-  },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
-  disclaimer: {
-    fontSize: 11,
-    color: '#6B7280',
-    textAlign: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 12,
-  },
-  // CHANGE: Added modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: '#1E293B',
-    borderRadius: 16,
-    padding: 24,
-    width: '80%',
-    maxWidth: 320,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  modalOption: {
+  loadingBubble: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 16,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255, 107, 107, 0.1)',
-    marginBottom: 12,
   },
-  modalOptionTextLogout: {
+  messageText: {
     fontSize: 16,
-    color: '#FF6B6B',
-    marginLeft: 12,
-    fontWeight: '500',
+    lineHeight: 22,
   },
-  modalCancelButton: {
-    paddingVertical: 12,
+  userText: {
+    color: 'white',
+  },
+  assistantText: {
+    color: '#E2E8F0',
+  },
+  errorText: {
+    color: 'white',
+  },
+  loadingText: {
+    color: '#8FA3B8',
+    marginLeft: 8,
+    fontSize: 14,
+  },
+  timestamp: {
+    fontSize: 12,
+    color: '#8FA3B8',
+    marginTop: 4,
+  },
+  // CHANGE: Static input container
+  inputContainer: {
+    backgroundColor: '#081725',
+    borderTopWidth: 1,
+    borderTopColor: '#1E293B',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    backgroundColor: '#1E293B',
+    borderRadius: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    minHeight: 48,
+  },
+  textInput: {
+    flex: 1,
+    color: 'white',
+    fontSize: 16,
+    maxHeight: 100,
+    paddingVertical: 8,
+    paddingRight: 12,
+  },
+  sendButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#4A90E2',
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
+    marginLeft: 8,
   },
-  modalCancelText: {
-    fontSize: 16,
-    color: '#94A3B8',
-    fontWeight: '500',
+  sendButtonDisabled: {
+    backgroundColor: '#4A5568',
+  },
+  senderLabel: {
+    fontSize: 12,
+    marginBottom: 4,
+    fontWeight: "600",
+  },
+  
+  userLabel: {
+    color: "#4A90E2",
+    alignSelf: "flex-end"
+  },
+  
+  assistantLabel: {
+    color: "#94A3B8",
+    alignSelf: "flex-start"
   },
 });

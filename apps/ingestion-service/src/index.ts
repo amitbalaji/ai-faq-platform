@@ -65,7 +65,7 @@ const s3 = new S3Client({
 /* ---------------- AI SERVICE CLIENT ---------------- */
 
 // CHANGE: Enhanced embedding generation with retry logic for better reliability
-async function generateEmbedding(text: string, retries: number = 2): Promise<number[]> {
+async function generateEmbedding(text: string, tenantId: string,retries: number = 2): Promise<number[]> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 30000)
 
@@ -73,7 +73,12 @@ async function generateEmbedding(text: string, retries: number = 2): Promise<num
     try {
       const response = await fetch(`${process.env.AI_SERVICE_URL}/embeddings`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-tenant-id': tenantId,
+          'x-user-id': 'system',
+          'x-role': 'admin'
+        },
         body: JSON.stringify({ text }),
         signal: controller.signal
       })
@@ -334,7 +339,7 @@ async function start() {
             }
 
             // CHANGE: Enhanced embedding generation with retry logic
-            const embedding = await generateEmbedding(finalChunk)
+            const embedding = await generateEmbedding(finalChunk,tenantId)
             await db.query(
               `
               INSERT INTO document_chunks
