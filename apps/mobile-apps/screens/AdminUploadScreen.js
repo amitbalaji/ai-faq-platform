@@ -42,7 +42,7 @@ export default function AdminUploadScreen({ navigation, route }) {
       });
 
       if (!result.canceled) {
-        if (result.size > 25 * 1024 * 1024) {
+        if (result.assets[0].size > 25 * 1024 * 1024) {
           Alert.alert('File Too Large', 'Maximum file size is 25MB');
           return;
         }
@@ -92,21 +92,14 @@ export default function AdminUploadScreen({ navigation, route }) {
       // CHANGE: Document service automatically triggers embedding processing via Kafka
       // No need to manually call embedding service - it's handled by the document service
 
-      Alert.alert(
-        'Success', 
-        'Document uploaded successfully and is being processed for search!',
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              setSelectedFile(null);
-              setUploadProgress('');
-              navigation.navigate('Chat', { user });
-            },
-          },
-        ]
+      console.warn(
+        'Success',
+        'Document uploaded successfully and is being processed for search!'
       );
-
+      
+      setSelectedFile(null);
+      setUploadProgress('');
+      navigation.navigate('Chat', { user });
     } catch (err) {
       console.error('Upload error:', err);
       Alert.alert(
