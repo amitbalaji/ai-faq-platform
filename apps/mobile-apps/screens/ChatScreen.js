@@ -9,16 +9,21 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, Feather } from '@expo/vector-icons';
 import { api } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function ChatScreen({ navigation, route }) {
   const { user } = route.params || {};
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const scrollViewRef = useRef(null);
+
+  const { logout } = useAuth();
 
   // Auto-scroll to bottom when new messages are added
   useEffect(() => {
@@ -26,6 +31,18 @@ export default function ChatScreen({ navigation, route }) {
       scrollViewRef.current.scrollToEnd({ animated: true });
     }
   }, [messages]);
+
+  const handleLogout = async () => {
+    console.log("LOGOUT CLICKED");
+  
+    try {
+      setShowSettingsModal(false);
+      await logout();
+      console.log("Logout completed");
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+  };
 
   const sendMessage = async () => {
     if (!inputText.trim() || isLoading) return;
@@ -137,7 +154,9 @@ export default function ChatScreen({ navigation, route }) {
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>AI Assistant</Text>
-        <View style={styles.headerRight} />
+        <TouchableOpacity onPress={() => setShowSettingsModal(true)}>
+          <Feather name="settings" size={22} color="white" />
+        </TouchableOpacity>
       </View>
 
       {/* CHANGE: Scrollable chat messages container */}
@@ -204,6 +223,39 @@ export default function ChatScreen({ navigation, route }) {
           </TouchableOpacity>
         </View>
       </View>
+
+      <Modal
+        visible={showSettingsModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSettingsModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            onPress={() => setShowSettingsModal(false)}
+          />
+
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Settings</Text>
+
+            <TouchableOpacity
+              style={styles.modalOption}
+              onPress={handleLogout}
+            >
+              <Ionicons name="log-out-outline" size={24} color="#FF6B6B" />
+              <Text style={styles.modalOptionTextLogout}>Logout</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalCancelButton}
+              onPress={() => setShowSettingsModal(false)}
+            >
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -242,7 +294,7 @@ const styles = StyleSheet.create({
   messagesContainer: {
     flex: 1,
     backgroundColor: '#081725',
-    maxHeight: 590
+    maxHeight: 550
   },
   messagesContent: {
     padding: 20,
@@ -373,5 +425,57 @@ const styles = StyleSheet.create({
   assistantLabel: {
     color: "#94A3B8",
     alignSelf: "flex-start"
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  modalContent: {
+    backgroundColor: '#1E293B',
+    borderRadius: 16,
+    padding: 24,
+    width: '80%',
+    maxWidth: 320,
+  },
+
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 107, 107, 0.1)',
+    marginBottom: 12,
+  },
+
+  modalOptionTextLogout: {
+    fontSize: 16,
+    color: '#FF6B6B',
+    marginLeft: 12,
+    fontWeight: '500',
+  },
+
+  modalCancelButton: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+
+  modalCancelText: {
+    fontSize: 16,
+    color: '#94A3B8',
+    fontWeight: '500',
   },
 });

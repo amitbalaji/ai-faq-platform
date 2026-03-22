@@ -354,8 +354,6 @@ app.post("/chat", async (req, res) => {
   const role = req.headers["x-role"] as string
   const { query, conversationId } = req.body
 
-  console.log(req.headers['Authorization']);
-
   if (!tenantId || !userId) {
     return res.status(401).json({ error: "Missing identity headers" })
   }

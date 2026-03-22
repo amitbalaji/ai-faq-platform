@@ -28,7 +28,7 @@ app.use(cors())
 const authServiceProxy = createProxyMiddleware({
   target: process.env.AUTH_SERVICE_URL || 'http://localhost:4001',
   changeOrigin: true,
- 
+
   onProxyReq: (proxyReq, req, res) => {
     // CHANGE: Simple logging without complex header manipulation
     console.log(`Proxying ${req.method} ${req.originalUrl} to auth service`);
@@ -150,13 +150,14 @@ app.post("/documents/search", verifyJWT, requireRole("user"), async (req, res) =
 
   try {
     // CHANGE: Generate embedding via AI service
-    const embeddingResponse = await fetch("http://localhost:4000/embeddings", {
+    const embeddingResponse = await fetch("http://localhost:3003/embeddings", {
       method: "POST",
-      headers: { "Content-Type": "application/json",
+      headers: { 
+        "Content-Type": "application/json",
         "x-tenant-id": user.tenantId,
         "x-user-id": user.userId,
         "x-role": user.role
-       },
+      },
       body: JSON.stringify({ text: query, model })
     })
 
@@ -187,6 +188,7 @@ app.post("/documents/search", verifyJWT, requireRole("user"), async (req, res) =
   }
 })
 
+// CHANGE: Add embeddings endpoint to route through AI service
 app.post("/embeddings", verifyJWT, async (req, res) => {
   const user = (req as any).user
   const { text, model } = req.body
